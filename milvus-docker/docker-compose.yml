@@ -1,0 +1,223 @@
+# milvus-docker/docker-compose.yml
+version: "3.8"
+
+networks:
+  ragnet:
+    driver: bridge
+
+services:
+  # ============================================
+  # 기존 서비스 (etcd, minio, milvus, vllm) 모두 유지
+  # ============================================
+
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.5
+    container_name: milvus-etcd
+    networks: [ragnet]
+    environment:
+      ETCD_AUTO_COMPACTION_MODE: revision
+      ETCD_AUTO_COMPACTION_RETENTION: "1000"
+      ETCD_QUOTA_BACKEND_BYTES: "4294967296"
+      ETCD_SNAPSHOT_COUNT: "50000"
+    volumes:
+      - etcd-data:/etcd
+    command: etcd -advertise-client-urls=http://127.0.0.1:2379 -listen-client-urls=http://0.0.0.0:2379 --data-dir=/etcd
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:RELEASE-2023-03-20T20-16-18Z
+    container_name: milvus-minio
+    networks: [ragnet]
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9001:9001"
+      - "9000:9000"
+    volumes:
+      - minio-data:/minio_data
+    command: minio server /minio_data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  milvus:
+    image: milvusdb/milvus:v2.4.15
+    container_name: milvus-standalone
+    networks: [ragnet]
+    environment:
+      ETCD_ENDPOINTS: etcd:2379
+      MINIO_ADDRESS: minio:9000
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "19530:19530"
+      - "9091:9091"
+    volumes:
+      - milvus-data:/var/lib/milvus
+    depends_on:
+      etcd:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:9091/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  vllm-a4000:
+    image: vllm/vllm-openai:latest
+    container_name: vllm-a4000
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    networks: [ragnet]
+    environment:
+      HUGGINGFACE_HUB_TOKEN: "${HUGGINGFACE_TOKEN}"
+      HF_TOKEN: "${HUGGINGFACE_TOKEN}"
+      HF_HOME: "/models"
+      TRANSFORMERS_OFFLINE: "0"
+      VLLM_USE_FLASHINFER: "0"
+    volumes:
+      - ../models/.hf-cache:/models:rw
+    command:
+      - "--model"
+      - "meta-llama/Llama-3.2-3B-Instruct"
+      - "--served-model-name"
+      - "llama-3.2-3b"
+      - "--download-dir"
+      - "/models"
+      - "--max-model-len"
+      - "4096"
+      - "--dtype"
+      - "float16"
+      - "--gpu-memory-utilization"
+      - "0.90"
+      - "--max-num-seqs"
+      - "12"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/v1/models"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+
+  # ============================================
+  # 🆕 FastAPI 서비스 (DB 연동 추가)
+  # ============================================
+  fastapi:
+    build:
+      context: ..
+      dockerfile: milvus-docker/Dockerfile
+    container_name: fastapi
+    networks: [ragnet]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    volumes:
+      - ..:/app
+      - ../models/.hf-cache:/models
+    ports:
+      - "8000:8000"
+    environment:
+      # === 기본 설정 ===
+      IS_DOCKER: "true"
+
+      # === 🆕 DB 연결 설정 ===
+      DB_HOST: ${DB_HOST}
+      DB_PORT: ${DB_PORT:-3306}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_NAME: ${DB_NAME}
+
+      # === 🆕 RAG 워크플로우 설정 ===
+      RAG_AUTO_PROCESS: ${RAG_AUTO_PROCESS:-true}
+      RAG_POLLING_INTERVAL: ${RAG_POLLING_INTERVAL:-60}
+      RAG_BATCH_SIZE: ${RAG_BATCH_SIZE:-10}
+      RAG_RESET_COLLECTION: ${RAG_RESET_COLLECTION:-0}
+
+      # === 🆕 청킹 설정 ===
+      CHUNK_TARGET_TOKENS: ${CHUNK_TARGET_TOKENS:-400}
+      CHUNK_OVERLAP_TOKENS: ${CHUNK_OVERLAP_TOKENS:-100}
+
+      # === MinIO 설정 ===
+      MINIO_ENDPOINT: "minio:9000"
+      MINIO_ACCESS_KEY: "minioadmin"
+      MINIO_SECRET_KEY: "minioadmin"
+      MINIO_SECURE: "false"
+      MINIO_PRESIGN_SCHEME: ${MINIO_PRESIGN_SCHEME:-https}
+      MINIO_PRESIGN_HOST: ${MINIO_PRESIGN_HOST:-gateway.example.com}
+      MINIO_PRESIGN_PATH_PREFIX: ${MINIO_PRESIGN_PATH_PREFIX:-/minio}
+
+      # === Milvus 설정 ===
+      MILVUS_HOST: "milvus"
+      MILVUS_PORT: "19530"
+      MILVUS_COLLECTION: ${MILVUS_COLLECTION:-rag_chunks_m3_v2}
+      MILVUS_SECTION_MAX: ${MILVUS_SECTION_MAX:-512}
+      MILVUS_DOCID_MAX: ${MILVUS_DOCID_MAX:-256}
+      MILVUS_CHUNK_MAX: ${MILVUS_CHUNK_MAX:-8192}
+      RAG_SECTION_MAX: ${RAG_SECTION_MAX:-200}
+
+      # === Milvus 인덱스 ===
+      MILVUS_INDEX_TYPE: ${MILVUS_INDEX_TYPE:-HNSW}
+      MILVUS_METRIC_TYPE: ${MILVUS_METRIC_TYPE:-IP}
+      MILVUS_HNSW_M: ${MILVUS_HNSW_M:-16}
+      MILVUS_HNSW_EFCON: ${MILVUS_HNSW_EFCON:-200}
+      MILVUS_EF_SEARCH: ${MILVUS_EF_SEARCH:-384}
+      MILVUS_EF_PER_K: ${MILVUS_EF_PER_K:-8}
+      MILVUS_EF_MAX: ${MILVUS_EF_MAX:-2048}
+
+      # === 검색 설정 ===
+      RAG_TOP_K: ${RAG_TOP_K:-20}
+      RAG_RERANK_TOP_K: ${RAG_RERANK_TOP_K:-5}
+      RAG_HYBRID_ALPHA: ${RAG_HYBRID_ALPHA:-0.7}
+
+      # === LLM 설정 ===
+      VLLM_HOST: "vllm-a4000"
+      VLLM_PORT: "8000"
+      VLLM_MODEL_NAME: ${VLLM_MODEL_NAME:-llama-3.2-3b}
+      VLLM_MAX_TOKENS: ${VLLM_MAX_TOKENS:-2048}
+      VLLM_TEMPERATURE: ${VLLM_TEMPERATURE:-0.1}
+
+      # === Hugging Face ===
+      HUGGINGFACE_TOKEN: ${HUGGINGFACE_TOKEN}
+      HF_HOME: "/models"
+
+    depends_on:
+      milvus:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      vllm-a4000:
+        condition: service_healthy
+
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/llama/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+    restart: unless-stopped
+
+volumes:
+  etcd-data:
+  minio-data:
+  milvus-data:
