@@ -1,0 +1,92 @@
+# Python 기본
+__pycache__/
+*.py[cod]
+*.so
+*.pyd
+*.pyo
+*.pyc
+
+# 가상환경
+venv/
+env/
+.venv/
+
+# PyTorch 모델
+*.pt
+*.pth
+*.pkl
+
+# 데이터 파일 (선택)
+*.csv
+*.xls
+*.xlsx
+*.db
+
+# 설정 파일
+*.env
+.env.*
+
+# 캐시/임시
+*.log
+*.tmp
+*.bak
+.DS_Store
+
+# 테스트 결과
+.coverage
+htmlcov/
+*.pytest_cache/
+*.json
+
+# VSCode 설정 (개인 설정은 제외)
+.vscode/
+.git
+# Pipenv, Poetry 등 기타
+Pipfile.lock
+poetry.lock
+
+# Docker
+*.pid
+*.sock
+
+# MinIO 관련
+minio/
+# 문서
+*.pdf
+*.docx
+*.doc
+*.pptx
+*.ppt
+*.xlsx
+*.xls
+*.odt
+*.odp
+*.ods
+*.rtf
+*.html
+*.htm
+*.txt
+*.csv
+# 이미지
+*.png
+*.jpg
+*.jpeg
+*.bmp
+*.gif
+*.tif
+*.tiff
+*.webp
+# 기타
+*.zip
+*.tar.gz
+*.tar.bz2
+*.md
+# Milvus 관련
+milvus/
+
+models/
+data/
+.flag
+
+/_FlagEmbedding_local/
+*.err

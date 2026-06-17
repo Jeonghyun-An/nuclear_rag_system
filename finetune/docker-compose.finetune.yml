@@ -1,0 +1,75 @@
+version: "3.9"
+
+services:
+  finetune:
+    build:
+      context: . # ← 현재 디렉토리: RAG_LAND/finetune
+      dockerfile: Dockerfile.finetune
+    container_name: nuclear-finetune
+
+    volumes:
+      # 코드 전체
+      - .:/workspace/finetune:rw
+
+      # 데이터 (QA jsonl 등) -> finetune/data
+      - ./data:/workspace/data:rw
+
+      # HF 모델 캐시 (완전 분리하고 싶으면 finetune/models 사용)
+      # 운영 vLLM과 따로 쓰고 싶으면 아래처럼:
+      - ./models:/workspace/models:rw
+      # 운영 vLLM과 캐시 공유하고 싶으면 위 줄 대신:
+      # - /data/models/.hf-cache:/workspace/models:rw
+
+      # 파인튜닝 결과 -> finetune/output
+      - ./output:/workspace/output:rw
+
+    environment:
+      # GPU 설정
+      CUDA_VISIBLE_DEVICES: "0"
+      NVIDIA_VISIBLE_DEVICES: "all"
+      NVIDIA_DRIVER_CAPABILITIES: "compute,utility"
+
+      # HuggingFace 토큰/캐시
+      HF_TOKEN: "${HUGGINGFACE_TOKEN}"
+      HF_HOME: "/workspace/models"
+      TRANSFORMERS_CACHE: "/workspace/models"
+
+      # Milvus (운영 스택의 milvus 컨테이너에 붙음)
+      MILVUS_HOST: "milvus"
+      MILVUS_PORT: "19530"
+      MILVUS_COLLECTION: "${MILVUS_COLLECTION}"
+
+      # 학습 설정
+      MODEL_NAME: "${MODEL_NAME}"
+      DATASET_PATH: "/workspace/data/nuclear_qa.jsonl"
+      TEST_DATASET_PATH: "/workspace/data/test_qa.jsonl"
+      OUTPUT_DIR: "/workspace/output/qwen2.5-7b-nuclear-lora"
+
+      LORA_R: "${LORA_R}"
+      LORA_ALPHA: "${LORA_ALPHA}"
+      LORA_DROPOUT: "${LORA_DROPOUT}"
+
+      BATCH_SIZE: "${BATCH_SIZE}"
+      GRADIENT_ACCUMULATION: "${GRADIENT_ACCUMULATION}"
+      NUM_EPOCHS: "${NUM_EPOCHS}"
+      LEARNING_RATE: "${LEARNING_RATE}"
+      MAX_SEQ_LENGTH: "${MAX_SEQ_LENGTH}"
+
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: ["gpu"]
+
+    stdin_open: true
+    tty: true
+
+    networks:
+      - ragnet
+
+networks:
+  ragnet:
+    external: true
+    name: ragnet

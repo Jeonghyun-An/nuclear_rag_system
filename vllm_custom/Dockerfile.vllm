@@ -1,0 +1,8 @@
+# /workspace/Dockerfile
+FROM vllm/vllm-openai:v0.11.0
+
+WORKDIR /workspace
+COPY suppress_chinese.py /workspace/suppress_chinese.py
+
+# vLLM이 "suppress_chinese:ChineseTokenSuppressor"를 import 가능해야 함
+ENV PYTHONPATH=/workspace
